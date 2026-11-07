@@ -6,3 +6,4 @@ publish.workspace = true
 description = "User-session prompt for the copysnitch application firewall."
 
 [dependencies]
+copysnitch-common = { path = "../copysnitch-common" }

@@ -6,3 +6,6 @@ publish.workspace = true
 description = "Root daemon for the copysnitch application firewall."
 
 [dependencies]
+copysnitch-common = { path = "../copysnitch-common" }
+libc = "0.2"
+sha2 = "0.10"

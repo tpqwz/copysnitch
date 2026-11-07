@@ -34,14 +34,52 @@ The UI crate is the piece to replace if the GTK prompt is wrong on a given deskt
 
 The UI talks to the daemon on a Unix socket. The daemon checks the peer credentials of that socket. The prompt process does not run as root.
 
+The shape of the decision comes from the small application firewalls: simplewall's per-program allow list and default deny, ZoneAlarm's split between the local network and the internet and between a client and a server, and the learning prompt those tools shared with Tiny Firewall. An answer remembers the program and the direction. A rule file can also name the zone. An outbound allow is not a server right.
+
 OpenSnitch is GPL-3. Keep its sources out of this tree. This is a clean implementation of the same kind of tool.
 
-## Build
+## Run
 
 Rust 1.85 or newer (edition 2024).
 
 ```sh
-cargo build
+mkdir -m 0700 -p "${XDG_RUNTIME_DIR:-$HOME/.cache}/copysnitch" "$HOME/.config/copysnitch/rules"
+cargo run -p copysnitchd -- \
+  --rules "$HOME/.config/copysnitch/rules" \
+  --socket "${XDG_RUNTIME_DIR:-$HOME/.cache}/copysnitch/copysnitch.sock"
 ```
 
-Nothing intercepts traffic yet. The crates record the language choice and the split between the root daemon and the user session.
+In another terminal:
+
+```sh
+cargo run -p copysnitch-ui -- \
+  --socket "${XDG_RUNTIME_DIR:-$HOME/.cache}/copysnitch/copysnitch.sock"
+```
+
+The rules directory and the socket's parent must be owned by the daemon's user and not writable by group or other. The socket itself is mode 0666. Only `--allow-uid` (the daemon's own uid, unless you set it) may connect. A root daemon that should prompt a desktop user needs a directory such as `/run/copysnitch` mode 0755 and `--allow-uid` set to that user.
+
+Paste a connection on the daemon's stdin. A line may be tab-separated fields, or `packet` and the hex of an IP packet, which is named from `/proc` on that machine:
+
+```text
+/usr/bin/curl	curl https://example.com	1000	tcp	example.com	93.184.216.34	443	outbound
+```
+
+The UI prints the program, the direction, and the zone. Answer with `allow once`, `deny session`, or `allow always`. Add `zone` (`allow always zone`) to remember only that zone: an internet allow does not cover the LAN. Type `forget curl` to remove a saved rule by its file name. A symlink is not removed. An answer that stores a rule prints `saved` and that file name. Type `rules` to list them. `once` covers that connection. `session` lasts until the daemon exits. `always` is written under the rules directory. No answer before `--timeout-secs` (default 30) denies it. Ctrl-D stops the daemon.
+
+A rule file is one safe file name per rule:
+
+```text
+action allow
+duration always
+direction outbound
+process.path /usr/bin/curl
+zone trusted
+```
+
+`zone trusted` is loopback, private LAN, link-local, and IPv6 unique-local. Other addresses are `internet`. `direction inbound` is a program accepting a connection.
+
+`copysnitchd --print-ruleset` prints the nftables ruleset for a guest. It queues new inbound and outbound connections and accepts them if the daemon is not running, so a stopped daemon does not black-hole the machine. An inbound packet is named after the listening program. Its peer address is the other end, and the port is the local service port. `--queue N` binds that queue and answers it. It does not install the ruleset. The queue fails open if the daemon exits. Neither is applied on the development host. Real interception belongs in the guest.
+
+An `always` or `session` answer records the SHA-256 of the program file when that file can be read. If the file changes, the rule no longer matches and the program is asked again.
+
+A queued packet is named from its headers and from a proc tree: the socket inode in `net/tcp` is matched to `/proc/<pid>/fd`. The development daemon still takes those connections from stdin. There is no eBPF attribution and no GTK tray.
