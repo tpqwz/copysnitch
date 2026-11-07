@@ -1,0 +1,8 @@
+[package]
+name = "copysnitch-common"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Rule types and daemon/UI messages for copysnitch."
+
+[dependencies]

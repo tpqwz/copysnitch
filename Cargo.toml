@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/copysnitch-common",
+    "crates/copysnitchd",
+    "crates/copysnitch-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
