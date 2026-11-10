@@ -54,6 +54,8 @@ pub enum Direction {
 pub enum Scope {
     Program,
     Zone,
+    /// The process path, the direction, and the exact command line.
+    Command,
 }
 
 /// One attempt the daemon can name.
@@ -102,6 +104,7 @@ pub enum Field {
     DestHost(String),
     DestIp(IpAddr),
     DestPort(u16),
+    Cmdline(String),
     Direction(Direction),
     ProcessPath(String),
     Protocol(Protocol),
@@ -225,6 +228,7 @@ pub fn parse_rule(name: &str, text: &str) -> Result<Rule, RuleParseError> {
                 duration = Some(Duration::Always);
                 continue;
             }
+            "process.command" => Field::Cmdline(value.to_string()),
             "process.path" => Field::ProcessPath(value.to_string()),
             "process.sha256" => {
                 if value.len() != 64
@@ -289,6 +293,7 @@ pub fn format_rule(rule: &Rule) -> String {
             Field::DestHost(value) => format!("dest.host {value}"),
             Field::DestIp(value) => format!("dest.ip {value}"),
             Field::DestPort(value) => format!("dest.port {value}"),
+            Field::Cmdline(value) => format!("process.command {value}"),
             Field::Direction(Direction::Inbound) => "direction inbound".to_string(),
             Field::Direction(Direction::Outbound) => "direction outbound".to_string(),
             Field::ProcessPath(value) => format!("process.path {value}"),
@@ -482,6 +487,7 @@ pub fn format_client_message(message: &ClientMessage) -> Result<String, WireErro
             match scope {
                 Scope::Program => body,
                 Scope::Zone => format!("{body}\tzone"),
+                Scope::Command => format!("{body}\tcommand"),
             }
         }
         ClientMessage::Forget { name } => {
@@ -646,6 +652,7 @@ fn parse_scope(value: &str) -> Result<Scope, WireError> {
     match value {
         "program" => Ok(Scope::Program),
         "zone" => Ok(Scope::Zone),
+        "command" => Ok(Scope::Command),
         _ => Err(WireError::Syntax),
     }
 }
@@ -680,6 +687,7 @@ impl Field {
             Field::DestHost(host) => host == &conn.dest_host,
             Field::DestIp(ip) => ip == &conn.dest_ip,
             Field::DestPort(port) => *port == conn.dest_port,
+            Field::Cmdline(cmdline) => cmdline == &conn.cmdline,
             Field::Direction(direction) => *direction == conn.direction,
             Field::ProcessPath(path) => path == &conn.process_path,
             Field::Sha256(hash) => !hash.is_empty() && hash == &conn.sha256,

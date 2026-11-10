@@ -153,6 +153,9 @@ impl Firewall {
         if !storable_path(&conn.process_path) {
             return Err(AnswerError::Unstorable);
         }
+        if scope == copysnitch_common::Scope::Command && !storable_path(&conn.cmdline) {
+            return Err(AnswerError::Unstorable);
+        }
         let zone = copysnitch_common::zone_of(conn.dest_ip);
         let mut when = vec![
             Field::ProcessPath(conn.process_path.clone()),
@@ -161,11 +164,25 @@ impl Firewall {
         if scope == copysnitch_common::Scope::Zone {
             when.push(Field::Zone(zone));
         }
+        if scope == copysnitch_common::Scope::Command {
+            when.push(Field::Cmdline(conn.cmdline.clone()));
+        }
+        when.push(Field::Uid(conn.uid));
+        when.push(Field::Protocol(conn.protocol));
         if let Some(hash) = file_sha256(&conn.process_path) {
             when.push(Field::Sha256(hash));
         }
         let rule = Rule {
-            name: stored_rule_name(action, &conn.process_path, conn.direction, scope, zone),
+            name: stored_rule_name(
+                action,
+                &conn.process_path,
+                conn.direction,
+                scope,
+                zone,
+                &conn.cmdline,
+                conn.uid,
+                conn.protocol,
+            ),
             action,
             duration,
             when,
@@ -323,6 +340,9 @@ fn stored_rule_name(
     direction: copysnitch_common::Direction,
     scope: copysnitch_common::Scope,
     zone: copysnitch_common::Zone,
+    cmdline: &str,
+    uid: u32,
+    protocol: copysnitch_common::Protocol,
 ) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     let action_tag = match action {
@@ -336,6 +356,7 @@ fn stored_rule_name(
     let scope_tag = match scope {
         copysnitch_common::Scope::Program => 5u8,
         copysnitch_common::Scope::Zone => 6u8,
+        copysnitch_common::Scope::Command => 9u8,
     };
     let mut bytes = vec![action_tag, direction_tag, scope_tag];
     if scope == copysnitch_common::Scope::Zone {
@@ -344,7 +365,16 @@ fn stored_rule_name(
             copysnitch_common::Zone::Trusted => 8,
         });
     }
+    bytes.push(match protocol {
+        copysnitch_common::Protocol::Icmp => 10,
+        copysnitch_common::Protocol::Tcp => 11,
+        copysnitch_common::Protocol::Udp => 12,
+    });
+    bytes.extend(uid.to_ne_bytes());
     bytes.extend(process_path.bytes());
+    if scope == copysnitch_common::Scope::Command {
+        bytes.extend(cmdline.bytes());
+    }
     for byte in bytes {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
@@ -424,9 +454,32 @@ fn summarize(rule: &Rule) -> String {
         summary.push(' ');
         summary.push_str(zone);
     }
+    if let Some(protocol) = rule.when.iter().find_map(|field| match field {
+        Field::Protocol(copysnitch_common::Protocol::Icmp) => Some("icmp"),
+        Field::Protocol(copysnitch_common::Protocol::Tcp) => Some("tcp"),
+        Field::Protocol(copysnitch_common::Protocol::Udp) => Some("udp"),
+        _ => None,
+    }) {
+        summary.push(' ');
+        summary.push_str(protocol);
+    }
+    if let Some(uid) = rule.when.iter().find_map(|field| match field {
+        Field::Uid(uid) => Some(*uid),
+        _ => None,
+    }) {
+        summary.push_str(" uid ");
+        summary.push_str(&uid.to_string());
+    }
     if !path.is_empty() {
         summary.push(' ');
         summary.push_str(path);
+    }
+    if let Some(command) = rule.when.iter().find_map(|field| match field {
+        Field::Cmdline(command) => Some(command.as_str()),
+        _ => None,
+    }) {
+        summary.push(' ');
+        summary.push_str(command);
     }
     summary
 }
@@ -723,6 +776,104 @@ mod tests {
     }
 
     #[test]
+    fn a_command_answer_does_not_cover_another_command() {
+        let dir = private_dir();
+        let mut fw = Firewall::load(&dir).unwrap();
+        let mut one = conn("/usr/bin/python3");
+        one.cmdline = "python3 one.py".to_string();
+        let mut other = one.clone();
+        other.cmdline = "python3 other.py".to_string();
+        let Step::Ask { id } = fw.decide(&one) else {
+            panic!("ask");
+        };
+        fw.answer(
+            id,
+            &one,
+            Action::Allow,
+            Duration::Session,
+            copysnitch_common::Scope::Command,
+        )
+        .unwrap();
+        match fw.decide(&one) {
+            Step::Decided {
+                action: Action::Allow,
+                ..
+            } => {}
+            other => panic!("the same command should be allowed, got {other:?}"),
+        }
+        assert!(
+            matches!(fw.decide(&other), Step::Ask { .. }),
+            "a different command line is a different program"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_allow_for_one_user_does_not_cover_another() {
+        let dir = private_dir();
+        let mut fw = Firewall::load(&dir).unwrap();
+        let mut mine = conn("/bin/app");
+        mine.uid = 1000;
+        let mut other = mine.clone();
+        other.uid = 0;
+        let Step::Ask { id } = fw.decide(&mine) else {
+            panic!("ask");
+        };
+        fw.answer(
+            id,
+            &mine,
+            Action::Allow,
+            Duration::Session,
+            copysnitch_common::Scope::Program,
+        )
+        .unwrap();
+        match fw.decide(&mine) {
+            Step::Decided {
+                action: Action::Allow,
+                ..
+            } => {}
+            other => panic!("the same user should be allowed, got {other:?}"),
+        }
+        assert!(
+            matches!(fw.decide(&other), Step::Ask { .. }),
+            "another user must be asked"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_allow_for_tcp_does_not_cover_udp() {
+        let dir = private_dir();
+        let mut fw = Firewall::load(&dir).unwrap();
+        let tcp = conn("/bin/app");
+        let mut udp = tcp.clone();
+        udp.protocol = copysnitch_common::Protocol::Udp;
+        let Step::Ask { id } = fw.decide(&tcp) else {
+            panic!("ask");
+        };
+        fw.answer(
+            id,
+            &tcp,
+            Action::Allow,
+            Duration::Session,
+            copysnitch_common::Scope::Program,
+        )
+        .unwrap();
+        match fw.decide(&tcp) {
+            Step::Decided {
+                action: Action::Allow,
+                ..
+            } => {}
+            other => panic!("the same tcp connection should be allowed, got {other:?}"),
+        }
+        assert!(
+            matches!(fw.decide(&udp), Step::Ask { .. }),
+            "udp must be asked"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn once_does_not_stick_and_always_is_reloaded() {
         let dir = private_dir();
         let mut fw = Firewall::load(&dir).unwrap();
@@ -775,7 +926,7 @@ mod tests {
                 let body = fs::read_to_string(dir.join(name)).unwrap();
                 assert_eq!(
                     body,
-                    "action deny\nduration always\ndirection outbound\nprocess.path /no/such/copysnitch-wget\n"
+                    "action deny\nduration always\ndirection outbound\nprocess.path /no/such/copysnitch-wget\nprotocol tcp\nuser.uid 1000\n"
                 );
             }
             other => panic!("reloaded rule should deny wget, got {other:?}"),
@@ -792,6 +943,9 @@ mod tests {
             copysnitch_common::Direction::Outbound,
             copysnitch_common::Scope::Program,
             copysnitch_common::Zone::Internet,
+            "",
+            1000,
+            copysnitch_common::Protocol::Tcp,
         );
         fs::write(
             dir.join(&name),
@@ -836,6 +990,9 @@ mod tests {
                 copysnitch_common::Direction::Outbound,
                 copysnitch_common::Scope::Program,
                 copysnitch_common::Zone::Internet,
+                "",
+                1000,
+                copysnitch_common::Protocol::Tcp,
             )),
         )
         .unwrap();

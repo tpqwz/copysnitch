@@ -380,6 +380,12 @@ mod tests {
             }
             other => panic!("saved rule should accept, got {other:?}"),
         }
+        let mut forwarded = message;
+        forwarded[30] = 2;
+        match judge_packet(&mut firewall, &forwarded, &root, 0).unwrap() {
+            Judgement::Verdict(bytes) => assert_eq!(&bytes[24..28], &[0, 0, 0, 0]),
+            other => panic!("a forwarded packet should drop, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(root);
     }

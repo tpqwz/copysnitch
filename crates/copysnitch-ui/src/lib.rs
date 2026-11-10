@@ -26,6 +26,7 @@ pub fn parse_operator_line(line: &str) -> Option<(Action, Duration, Scope)> {
     let scope = match parts.next() {
         None => Scope::Program,
         Some("zone") if duration != Duration::Once => Scope::Zone,
+        Some("command") if duration != Duration::Once => Scope::Command,
         _ => return None,
     };
     if parts.next().is_some() {
@@ -188,6 +189,11 @@ mod tests {
             parse_operator_line("allow always zone"),
             Some((Action::Allow, Duration::Always, Scope::Zone))
         );
+        assert_eq!(
+            parse_operator_line("allow session command"),
+            Some((Action::Allow, Duration::Session, Scope::Command))
+        );
+        assert_eq!(parse_operator_line("allow once command"), None);
         assert_eq!(parse_operator_line("allow once zone"), None);
         assert_eq!(parse_operator_line("allow forever"), None);
         assert_eq!(parse_operator_line("allow once extra"), None);

@@ -37,14 +37,22 @@ table inet copysnitch {
 ///
 /// `proc_root` is a directory shaped like `/proc`. An unknown socket still
 /// returns a connection; its process path is empty.
-/// A stdin line is either the tab-separated connection text or `packet ` plus hex.
-/// Hex is decoded and named from `proc_root`. The development host does not install nftables.
+/// A stdin line is either the tab-separated connection text or `packet [in|out] <hex>`.
+/// Hex is decoded and named from `proc_root`. Bare `packet` is outbound.
 pub fn connection_from_line(line: &str, proc_root: &Path) -> Result<Connection, WireError> {
-    let Some(hex) = line.strip_prefix("packet ") else {
+    let Some(rest) = line.strip_prefix("packet ") else {
         return parse_connection_line(line);
     };
-    let bytes = decode_hex(hex.trim()).map_err(|_| WireError::Syntax)?;
-    name_outbound(&bytes, proc_root).map_err(|_| WireError::Syntax)
+    let rest = rest.trim();
+    let (direction, hex) = if let Some(hex) = rest.strip_prefix("in ") {
+        (Direction::Inbound, hex.trim())
+    } else if let Some(hex) = rest.strip_prefix("out ") {
+        (Direction::Outbound, hex.trim())
+    } else {
+        (Direction::Outbound, rest)
+    };
+    let bytes = decode_hex(hex).map_err(|_| WireError::Syntax)?;
+    name_packet(&bytes, proc_root, direction).map_err(|_| WireError::Syntax)
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>, ()> {
@@ -473,6 +481,37 @@ mod tests {
         assert_eq!(
             connection_from_line("packet zz", &root),
             Err(WireError::Syntax)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_packet_in_line_names_the_listener() {
+        let root = private_dir();
+        std::fs::create_dir_all(root.join("net")).unwrap();
+        std::fs::write(
+            root.join("net/tcp"),
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0200000A:0016 22D8B85D:D431 01 00000000:00000000 00:00000000 00000000     0        0 99 1 0000000000000000 100 0 0 10 0\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("7/fd")).unwrap();
+        std::os::unix::fs::symlink("socket:[99]", root.join("7/fd/4")).unwrap();
+        std::fs::write(root.join("7/cmdline"), b"sshd:\0listener\0").unwrap();
+        std::os::unix::fs::symlink("/usr/sbin/sshd", root.join("7/exe")).unwrap();
+        let packet = [
+            0x45u8, 0x00, 0x00, 0x28, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00, 93, 184, 216,
+            34, 10, 0, 0, 2, 0xd4, 0x31, 0x00, 0x16, 0, 0, 0, 0, 0, 0, 0, 0, 0x50, 0x02, 0, 0, 0,
+            0, 0, 0,
+        ];
+        let hex: String = packet.iter().map(|byte| format!("{byte:02x}")).collect();
+        let connection =
+            connection_from_line(&format!("packet in {hex}"), &root).expect("inbound packet");
+        assert_eq!(connection.process_path, "/usr/sbin/sshd");
+        assert_eq!(connection.direction, Direction::Inbound);
+        assert_eq!(connection.dest_port, 22);
+        assert_eq!(
+            connection.dest_ip,
+            "93.184.216.34".parse::<std::net::IpAddr>().unwrap()
         );
         let _ = std::fs::remove_dir_all(root);
     }

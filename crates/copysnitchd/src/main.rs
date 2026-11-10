@@ -207,7 +207,7 @@ only --allow-uid may speak on it. The default uid is this process.
 Each stdin line is one connection, fields separated by tabs:
   process-path  command  uid  tcp|udp|icmp  host  ip  port  inbound|outbound
 or a packet named from /proc:
-  packet <hex>
+  packet [in|out] <hex>
 
 No answer within the timeout denies the connection. Ctrl-D stops the daemon.
 --queue N binds that netfilter queue. It does not install nftables rules.

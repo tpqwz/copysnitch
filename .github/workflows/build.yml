@@ -1,0 +1,22 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copysnitchd-linux-x86_64
+          path: target/release/copysnitchd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copysnitch-ui-linux-x86_64
+          path: target/release/copysnitch-ui
