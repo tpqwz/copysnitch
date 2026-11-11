@@ -598,6 +598,7 @@ impl Loop<'_> {
                 self.queue = None;
             }
         }
+        let _ = self.write_message(&decision_message(&connection, action, &because));
         self.emit(Event::Decision {
             connection,
             action,
@@ -830,6 +831,52 @@ fn peer_uid(fd: RawFd) -> io::Result<u32> {
     Ok(cred.uid)
 }
 
+fn decision_message(
+    connection: &Connection,
+    action: Action,
+    because: &DecisionBecause,
+) -> ServerMessage {
+    let because = match because {
+        DecisionBecause::Rule(name) => format!("rule {name}"),
+        DecisionBecause::Answer { duration, name } => {
+            let duration = match duration {
+                copysnitch_common::Duration::Once => "once",
+                copysnitch_common::Duration::Session => "session",
+                copysnitch_common::Duration::Always => "always",
+            };
+            match name {
+                Some(name) => format!("{duration} {name}"),
+                None => duration.to_string(),
+            }
+        }
+        DecisionBecause::Timeout => "timeout".to_string(),
+    };
+    let direction = match connection.direction {
+        copysnitch_common::Direction::Inbound => "inbound",
+        copysnitch_common::Direction::Outbound => "outbound",
+    };
+    let protocol = match connection.protocol {
+        copysnitch_common::Protocol::Icmp => "icmp",
+        copysnitch_common::Protocol::Tcp => "tcp",
+        copysnitch_common::Protocol::Udp => "udp",
+    };
+    let zone = match copysnitch_common::zone_of(connection.dest_ip) {
+        copysnitch_common::Zone::Internet => "internet",
+        copysnitch_common::Zone::Trusted => "trusted",
+    };
+    ServerMessage::Decision {
+        action,
+        because,
+        path: connection.process_path.clone(),
+        detail: format!(
+            "{direction} {protocol} {zone} {}:{port}",
+            connection.dest_ip,
+            port = connection.dest_port
+        ),
+        command: connection.cmdline.clone(),
+    }
+}
+
 fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     // SAFETY: F_GETFL and F_SETFL apply to an fd this process owns. A negative
     // return is an error code, and the flags word is only passed back to fcntl.
@@ -949,6 +996,27 @@ mod tests {
             copysnitch_common::Zone::Internet
         );
         writeln!(client, "answer\t{id}\tallow\talways").unwrap();
+
+        let mut stored = String::new();
+        let mut event_line = String::new();
+        let mut reader = io::BufReader::new(client.try_clone().unwrap());
+        reader.read_line(&mut stored).unwrap();
+        reader.read_line(&mut event_line).unwrap();
+        assert!(stored.starts_with("ok\trule\t"), "{stored}");
+        match copysnitch_common::parse_server_message(event_line.trim_end_matches('\n'))
+            .expect("decision line")
+        {
+            ServerMessage::Decision {
+                action: Action::Allow,
+                path,
+                detail,
+                ..
+            } => {
+                assert_eq!(path, "/usr/bin/curl");
+                assert!(detail.contains("internet"), "{detail}");
+            }
+            other => panic!("expected a decision, got {other:?} from {event_line}"),
+        }
 
         let event = running.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {

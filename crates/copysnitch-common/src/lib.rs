@@ -335,15 +335,31 @@ pub enum ClientMessage {
 /// A line the daemon sends to the UI. The line has no trailing newline.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerMessage {
-    Prompt { id: u64, connection: Connection },
+    Prompt {
+        id: u64,
+        connection: Connection,
+    },
     Denied,
     Busy,
     BadRequest,
     Rejected,
     Forgotten,
-    Stored { name: String },
-    Rule { name: String, summary: String },
+    Stored {
+        name: String,
+    },
+    Rule {
+        name: String,
+        summary: String,
+    },
     RulesEnd,
+    /// A decision the main window lists. Fields contain no tabs.
+    Decision {
+        action: Action,
+        because: String,
+        path: String,
+        detail: String,
+        command: String,
+    },
 }
 
 /// The socket line was not in the allowlist, or a field could not be represented.
@@ -467,6 +483,20 @@ pub fn parse_server_message(line: &str) -> Result<ServerMessage, WireError> {
             })
         }
         ["ok", "rules"] => Ok(ServerMessage::RulesEnd),
+        ["event", action, because, path, detail, command]
+            if wire_text_ok(because)
+                && wire_text_ok(path)
+                && wire_text_ok(detail)
+                && wire_text_ok(command) =>
+        {
+            Ok(ServerMessage::Decision {
+                action: parse_action(action)?,
+                because: (*because).to_string(),
+                path: (*path).to_string(),
+                detail: (*detail).to_string(),
+                command: (*command).to_string(),
+            })
+        }
         _ => Err(WireError::Syntax),
     }
 }
@@ -541,6 +571,29 @@ pub fn format_server_message(message: &ServerMessage) -> Result<String, WireErro
             format!("rule\t{name}\t{summary}")
         }
         ServerMessage::RulesEnd => "ok\trules".to_string(),
+        ServerMessage::Decision {
+            action,
+            because,
+            path,
+            detail,
+            command,
+        } => {
+            if !wire_text_ok(because)
+                || !wire_text_ok(path)
+                || !wire_text_ok(detail)
+                || !wire_text_ok(command)
+                || because.contains('\t')
+                || path.contains('\t')
+                || detail.contains('\t')
+                || command.contains('\t')
+            {
+                return Err(WireError::Unrepresentable);
+            }
+            format!(
+                "event\t{}\t{because}\t{path}\t{detail}\t{command}",
+                action_token(*action)
+            )
+        }
     };
     finish_line(body)
 }
@@ -925,6 +978,22 @@ duration always
         assert_eq!(
             parse_server_message("error\tdenied"),
             Ok(ServerMessage::Denied)
+        );
+        let event = ServerMessage::Decision {
+            action: Action::Allow,
+            because: "timeout".to_string(),
+            path: "/usr/bin/curl".to_string(),
+            detail: "outbound tcp internet 1.2.3.4:443".to_string(),
+            command: "curl https://example.com".to_string(),
+        };
+        let line = format_server_message(&event).expect("event formats");
+        assert_eq!(
+            line,
+            "event\tallow\ttimeout\t/usr/bin/curl\toutbound tcp internet 1.2.3.4:443\tcurl https://example.com\n"
+        );
+        assert_eq!(
+            parse_server_message(line.trim_end_matches('\n')).expect("event parses"),
+            event
         );
         let connection = Connection {
             process_path: "/bin/x\tsecret".to_string(),

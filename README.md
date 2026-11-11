@@ -1,8 +1,10 @@
 # copysnitch
 
-A Linux application firewall, alpha `0.1.0-alpha.1`. When a program opens an outbound connection, name that program and ask whether to allow it.
+A Linux application firewall, alpha `0.1.0-alpha.2`. When a program opens an outbound connection, name that program and ask whether to allow it.
 
 Linux x86_64. MIT license. A release build produces `copysnitchd` and `copysnitch-ui`.
+
+A push and a pull request build those two programs. A GitHub release attaches `copysnitchd-linux-x86_64` and `copysnitch-ui-linux-x86_64`. The UI executable needs the system GTK 4 library.
 
 [OpenSnitch](https://github.com/evilsocket/opensnitch) is the existing tool in this category. Its daemon is Go, its interface is Python and PyQt6, and its process monitor is eBPF. copysnitch is a new implementation of that job, in one systems language, with no Node and no Python.
 
@@ -31,7 +33,7 @@ The UI crate is the piece to replace if the GTK prompt is wrong on a given deskt
 | Crate | Role |
 | --- | --- |
 | `crates/copysnitchd` | Root daemon. Owns interception and the decision. |
-| `crates/copysnitch-ui` | User session. Tray icon and the allow or deny prompt. |
+| `crates/copysnitch-ui` | User session. Main window and the allow or deny prompt. |
 | `crates/copysnitch-common` | Rule types and the socket messages both sides share. |
 
 The UI talks to the daemon on a Unix socket. The daemon checks the peer credentials of that socket. The prompt process does not run as root.
@@ -51,7 +53,7 @@ cargo run -p copysnitchd -- \
   --socket "${XDG_RUNTIME_DIR:-$HOME/.cache}/copysnitch/copysnitch.sock"
 ```
 
-In another terminal:
+In another terminal the GTK window opens. It lists connections, programs, zones, and rules. A prompt opens on top when a program needs an answer:
 
 ```sh
 cargo run -p copysnitch-ui -- \
@@ -84,4 +86,4 @@ zone trusted
 
 An `always` or `session` answer records the SHA-256 of the program file when that file can be read. If the file changes, the rule no longer matches and the program is asked again.
 
-A queued packet is named from its headers and from a proc tree: the socket inode in `net/tcp` is matched to `/proc/<pid>/fd`. The development daemon still takes those connections from stdin. There is no eBPF attribution and no GTK tray.
+A queued packet is named from its headers and from a proc tree: the socket inode in `net/tcp` is matched to `/proc/<pid>/fd`. The development daemon still takes those connections from stdin. There is no eBPF attribution and no system tray. The window is the connection list, the program counts, the trusted and internet zones, and the rules.

@@ -3,7 +3,8 @@ name = "copysnitch-ui"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "User-session prompt for the copysnitch application firewall."
+description = "User-session window for the copysnitch application firewall."
 
 [dependencies]
 copysnitch-common = { path = "../copysnitch-common" }
+gtk4 = "0.9"
