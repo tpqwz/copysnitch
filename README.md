@@ -1,6 +1,6 @@
 # copysnitch
 
-A Linux application firewall, alpha `0.1.0-alpha.2`. When a program opens an outbound connection, name that program and ask whether to allow it.
+A Linux application firewall, alpha `0.1.0-alpha.3`. When a program opens an outbound connection, name that program and ask whether to allow it.
 
 Linux x86_64. MIT license. A release build produces `copysnitchd` and `copysnitch-ui`.
 
